@@ -73,3 +73,4 @@ Model Manager ใช้ได้สองแบบ:
 - Keras `.h5` / `.keras` รันผ่าน backend `server.py` และเก็บไฟล์ไว้ในโฟลเดอร์ `server_models/`
 
 ข้อจำกัด: `.pt` และ `.onnx` ยังไม่รองรับ ต้องแปลงเป็น TensorFlow.js หรือ Keras ก่อน
+# snn_workflow_web_project_v2
