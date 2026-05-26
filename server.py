@@ -16,6 +16,7 @@ from tensorflow import keras
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = ROOT / "server_models"
 METADATA_PATH = MODEL_DIR / "models.json"
+METADATA_BACKUP_PATH = MODEL_DIR / "models.backup.json"
 IMAGE_SIZE = (224, 224)
 
 app = Flask(__name__, static_folder=str(ROOT), static_url_path="")
@@ -105,13 +106,19 @@ def read_models():
 
 
 def write_models(models):
-  METADATA_PATH.write_text(json.dumps(models, ensure_ascii=False, indent=2), encoding="utf-8")
+  next_text = json.dumps(models, ensure_ascii=False, indent=2)
+  if METADATA_PATH.exists():
+    current_text = METADATA_PATH.read_text(encoding="utf-8")
+    if current_text.strip() and current_text != next_text:
+      METADATA_BACKUP_PATH.write_text(current_text, encoding="utf-8")
+  METADATA_PATH.write_text(next_text, encoding="utf-8")
 
 
 def public_model_meta(model):
   return {
     "id": model["id"],
     "name": model["name"],
+    "originalName": model.get("originalName") or model.get("name"),
     "size": model["size"],
     "uploadedAt": model["uploadedAt"],
     "active": model.get("active", False),
@@ -121,10 +128,51 @@ def public_model_meta(model):
   }
 
 
+def model_dedupe_key(model):
+  return (model.get("originalName") or model.get("name") or "").strip().lower()
+
+
+def dedupe_model_records(models):
+  by_key = {}
+  for model in models:
+    key = model_dedupe_key(model)
+    current = by_key.get(key)
+    if current is None or model.get("active") or (not current.get("active") and model.get("outputMode") and not current.get("outputMode")):
+      by_key[key] = model
+  return list(by_key.values())
+
+
+def recover_model_metadata():
+  existing_models = read_models()
+  existing_by_file = {Path(model.get("path", "")).name: model for model in existing_models}
+  existing_by_id = {model.get("id"): model for model in existing_models if model.get("id")}
+  recovered = []
+  for path in sorted(MODEL_DIR.glob("*.h5")) + sorted(MODEL_DIR.glob("*.keras")):
+    model_id = path.stem
+    current = existing_by_file.get(path.name) or existing_by_id.get(model_id) or {}
+    recovered.append({
+      "id": current.get("id") or model_id,
+      "name": current.get("name") or current.get("originalName") or path.name,
+      "size": f"{path.stat().st_size / 1024 / 1024:.2f} MB",
+      "uploadedAt": current.get("uploadedAt") or "",
+      "active": current.get("active", False),
+      "format": "keras-h5",
+      "outputMode": current.get("outputMode", "auto"),
+      "path": str(path),
+    })
+  if recovered and not any(model["active"] for model in recovered):
+    recovered[0]["active"] = True
+  write_models(recovered)
+  return recovered
+
+
 def load_backend_model(model_id):
   if model_id in model_cache:
     return model_cache[model_id]
-  model_meta = next((m for m in read_models() if m["id"] == model_id), None)
+  models = read_models()
+  if not models and any(MODEL_DIR.glob("*.h5")):
+    models = recover_model_metadata()
+  model_meta = next((m for m in models if m["id"] == model_id), None)
   if not model_meta:
     raise ValueError("Model not found")
   model = load_keras_model(model_meta["path"])
@@ -133,6 +181,8 @@ def load_backend_model(model_id):
 
 
 def infer_output_mode(model):
+  if not hasattr(model, "inputs"):
+    return "score"
   if len(model.inputs) < 2:
     return "embedding"
   layer = model.layers[-1]
@@ -174,20 +224,29 @@ def normalize_score(value, output_mode="auto"):
 def cosine_score(left, right):
   left = np.asarray(left).reshape(-1)
   right = np.asarray(right).reshape(-1)
+  if not np.all(np.isfinite(left)) or not np.all(np.isfinite(right)):
+    raise ValueError("Model embedding contains NaN or Infinity")
   denom = np.linalg.norm(left) * np.linalg.norm(right)
-  if denom == 0:
+  if not math.isfinite(float(denom)) or denom == 0:
     return 0.0
   cosine = float(np.dot(left, right) / denom)
+  if not math.isfinite(cosine):
+    raise ValueError("Model cosine similarity is not finite")
   return round(float(np.clip((cosine + 1.0) / 2.0, 0.0, 1.0)), 4)
 
 
 def raw_cosine(left, right):
   left = np.asarray(left).reshape(-1)
   right = np.asarray(right).reshape(-1)
+  if not np.all(np.isfinite(left)) or not np.all(np.isfinite(right)):
+    raise ValueError("Model embedding contains NaN or Infinity")
   denom = np.linalg.norm(left) * np.linalg.norm(right)
-  if denom == 0:
+  if not math.isfinite(float(denom)) or denom == 0:
     return 0.0
-  return round(float(np.dot(left, right) / denom), 4)
+  cosine = float(np.dot(left, right) / denom)
+  if not math.isfinite(cosine):
+    raise ValueError("Model cosine similarity is not finite")
+  return round(cosine, 4)
 
 
 @app.get("/")
@@ -202,7 +261,14 @@ def health():
 
 @app.get("/api/models")
 def list_models():
-  return jsonify({"models": [public_model_meta(model) for model in read_models()]})
+  models = read_models()
+  if not models and any(MODEL_DIR.glob("*.h5")):
+    models = recover_model_metadata()
+  deduped = dedupe_model_records(models)
+  if len(deduped) != len(models):
+    write_models(deduped)
+    models = deduped
+  return jsonify({"models": [public_model_meta(model) for model in models]})
 
 
 @app.post("/api/models")
@@ -218,25 +284,27 @@ def upload_model():
   file.save(path)
 
   try:
-    model = load_keras_model(path)
-    model_cache[model_id] = model
+    keras_model = load_keras_model(path)
+    model_cache[model_id] = keras_model
   except Exception as exc:
     path.unlink(missing_ok=True)
     return jsonify({"error": f"Cannot load model: {exc}"}), 400
 
-  for model in models:
-    model["active"] = False
+  for model_meta in models:
+    model_meta["active"] = False
   meta = {
     "id": model_id,
     "name": file.filename,
+    "originalName": file.filename,
     "size": f"{path.stat().st_size / 1024 / 1024:.2f} MB",
     "uploadedAt": request.form.get("uploadedAt") or "",
     "active": True,
     "format": "keras-h5",
-    "outputMode": infer_output_mode(model),
+    "outputMode": infer_output_mode(keras_model),
     "path": str(path),
   }
   models.insert(0, meta)
+  models = dedupe_model_records(models)
   write_models(models)
   return jsonify({"model": public_model_meta(meta)})
 

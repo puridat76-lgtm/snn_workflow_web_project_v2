@@ -43,13 +43,14 @@ function loadModels() {
   try {
     const parsed = JSON.parse(saved);
     if (!parsed.length) return [DEFAULT_MODEL];
-    return parsed;
+    return dedupeModels(parsed);
   } catch {
     return [DEFAULT_MODEL];
   }
 }
 
 function saveModels() {
+  state.models = dedupeModels(state.models);
   localStorage.setItem("snn-demo-models-v2", JSON.stringify(state.models));
 }
 
@@ -180,11 +181,37 @@ async function syncBackendModels() {
 
 function mergeModels(primary, secondary) {
   const seen = new Set();
-  return [...primary, ...secondary].filter((model) => {
+  const merged = [...primary, ...secondary].filter((model) => {
     if (seen.has(model.id)) return false;
     seen.add(model.id);
     return true;
   });
+  return dedupeModels(merged);
+}
+
+function modelDedupeKey(model) {
+  if (model.id === "default") return "default";
+  return displayModelName(model).trim().toLowerCase();
+}
+
+function displayModelName(model) {
+  return model?.originalName || model?.name || "Custom model";
+}
+
+function dedupeModels(models) {
+  const byKey = new Map();
+  (models || []).forEach((model) => {
+    const key = modelDedupeKey(model);
+    const current = byKey.get(key);
+    if (!current || model.active || (!current.active && model.outputMode && !current.outputMode)) {
+      byKey.set(key, model);
+    }
+  });
+  const deduped = Array.from(byKey.values());
+  if (!deduped.some((model) => model.id === "default")) {
+    deduped.push({ ...DEFAULT_MODEL, active: !deduped.some((model) => model.active) });
+  }
+  return deduped;
 }
 
 function setModelEngineStatus(name, detail, ready = false) {
@@ -403,8 +430,15 @@ function normalizeVector(values) {
 function cosineSimilarity(left, right) {
   if (!left || !right || left.length !== right.length) return 0;
   let dot = 0;
-  for (let i = 0; i < left.length; i++) dot += left[i] * right[i];
-  return Math.max(0, Math.min(1, (dot + 1) / 2));
+  for (let i = 0; i < left.length; i++) {
+    if (!Number.isFinite(left[i]) || !Number.isFinite(right[i])) {
+      throw new Error("Model embedding contains NaN or Infinity");
+    }
+    dot += left[i] * right[i];
+  }
+  const score = (dot + 1) / 2;
+  if (!Number.isFinite(score)) throw new Error("Model cosine similarity is not finite");
+  return Math.max(0, Math.min(1, score));
 }
 
 function renderCustomDataset() {
@@ -549,12 +583,21 @@ async function calculateScore(leftImg, rightImg) {
 }
 
 function makeMetricResult(score, label = "Similarity Score", displayValue = score, outputMode = "score") {
+  const numericScore = Number(score);
+  const numericDisplayValue = Number(displayValue);
   return {
-    score: Number(score),
+    score: numericScore,
     label,
-    displayValue: Number(displayValue),
+    displayValue: numericDisplayValue,
     outputMode,
   };
+}
+
+function assertValidMetric(metric) {
+  if (!Number.isFinite(metric?.score) || !Number.isFinite(metric?.displayValue)) {
+    throw new Error("Model returned a non-finite similarity value");
+  }
+  return metric;
 }
 
 async function getBackendPairScore(leftImg, rightImg) {
@@ -616,14 +659,14 @@ async function updatePair(leftId, rightId) {
 
   let metric = makeMetricResult(0);
   try {
-    metric = await calculateScore(leftImg, rightImg);
+    metric = assertValidMetric(await calculateScore(leftImg, rightImg));
   } catch (error) {
     console.error(error);
     const errorLabel = getMetricLabel();
     document.getElementById("scoreText").textContent = `${errorLabel} = คำนวณไม่ได้`;
     renderMetricLabel(errorLabel);
     document.getElementById("bigScore").textContent = "-";
-    document.getElementById("decisionExplain").textContent = "โหลดหรืออ่านภาพไม่สำเร็จ";
+    document.getElementById("decisionExplain").textContent = error.message || "โหลดหรืออ่านภาพไม่สำเร็จ";
     return;
   }
   if (requestId !== state.pairRequestId) return;
@@ -965,7 +1008,7 @@ function updateCurrentModelCard() {
   const active = state.models.find((m) => m.active) || DEFAULT_MODEL;
   const isLoadedCustom = active.id && active.id === state.modelEngine.customModelId;
   const isBackendActive = active.backend && active.id === state.modelEngine.backendModelId;
-  const name = active.id === "default" || isLoadedCustom || isBackendActive ? state.modelEngine.name : active.name;
+  const name = active.id === "default" || isLoadedCustom || isBackendActive ? state.modelEngine.name : displayModelName(active);
   document.getElementById("currentModelName").textContent = name;
   document.getElementById("currentModelDetail").textContent = active.id === "default" || isLoadedCustom || isBackendActive
     ? state.modelEngine.detail
@@ -991,6 +1034,7 @@ function renderMetricLabel(label = getMetricLabel()) {
 }
 
 function renderModelList() {
+  state.models = dedupeModels(state.models);
   updateCurrentModelCard();
   const list = document.getElementById("modelList");
   list.innerHTML = "";
@@ -999,7 +1043,7 @@ function renderModelList() {
     item.className = `model-item ${model.active ? "active" : ""}`;
     item.innerHTML = `
       <div>
-        <strong>${escapeHtml(model.name)}</strong>
+        <strong>${escapeHtml(displayModelName(model))}</strong>
         <small>${escapeHtml(model.size)} • ${escapeHtml(model.uploadedAt)}${model.outputMode && model.outputMode !== "auto" ? ` • output: ${escapeHtml(model.outputMode)}` : ""}</small>
       </div>
       <button data-id="${model.id}">${model.active ? "กำลังใช้อยู่" : "ใช้โมเดลนี้"}</button>
@@ -1025,7 +1069,10 @@ async function activateModel(id) {
     try {
       const response = await fetch(`/api/models/${encodeURIComponent(id)}/activate`, { method: "POST" });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Cannot activate backend model");
+      if (!response.ok) {
+        await syncBackendModels();
+        throw new Error(data.error || "Cannot activate backend model");
+      }
       if (data.model?.outputMode) modelMeta.outputMode = data.model.outputMode;
       state.modelEngine.customModel = null;
       state.modelEngine.customModelId = null;

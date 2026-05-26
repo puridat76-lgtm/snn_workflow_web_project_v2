@@ -1,0 +1,35 @@
+[
+  {
+    "id": "14d068a8-2764-45bd-9c80-85d141b15002",
+    "name": "siamese_model(Anna).h5",
+    "originalName": "siamese_model(Anna).h5",
+    "size": "12.12 MB",
+    "uploadedAt": "",
+    "active": false,
+    "format": "keras-h5",
+    "outputMode": "embedding",
+    "path": "/Users/p1650900770/Downloads/snn_workflow_web_project_v2/server_models/14d068a8-2764-45bd-9c80-85d141b15002.h5"
+  },
+  {
+    "id": "334f16a2-a344-4e1b-a699-072b1531854b",
+    "name": "siamese_model(Ammy).h5",
+    "originalName": "siamese_model(Ammy).h5",
+    "size": "10.52 MB",
+    "uploadedAt": "",
+    "active": true,
+    "format": "keras-h5",
+    "outputMode": "embedding",
+    "path": "/Users/p1650900770/Downloads/snn_workflow_web_project_v2/server_models/334f16a2-a344-4e1b-a699-072b1531854b.h5"
+  },
+  {
+    "id": "244c48b9-6803-4dbd-a18b-43ee40d7b899",
+    "name": "mobilenet_embedding_encoder.keras",
+    "originalName": "mobilenet_embedding_encoder.keras",
+    "size": "9.18 MB",
+    "uploadedAt": "",
+    "active": false,
+    "format": "keras-h5",
+    "outputMode": "auto",
+    "path": "/Users/p1650900770/Downloads/snn_workflow_web_project_v2/server_models/244c48b9-6803-4dbd-a18b-43ee40d7b899.keras"
+  }
+]
