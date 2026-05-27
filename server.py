@@ -78,6 +78,12 @@ CUSTOM_OBJECTS = {
   "ManhattanDistance": DistanceLayer,
 }
 
+KNOWN_MODEL_NAMES_BY_SIZE = {
+  "12.12 MB": "siamese_model(Anna).h5",
+  "10.52 MB": "siamese_model(Ammy).h5",
+  "9.18 MB": "mobilenet_embedding_encoder.keras",
+}
+
 
 def load_keras_model(path):
   with keras.utils.custom_object_scope(CUSTOM_OBJECTS):
@@ -115,10 +121,11 @@ def write_models(models):
 
 
 def public_model_meta(model):
+  display_name = get_display_model_name(model)
   return {
     "id": model["id"],
-    "name": model["name"],
-    "originalName": model.get("originalName") or model.get("name"),
+    "name": display_name,
+    "originalName": display_name,
     "size": model["size"],
     "uploadedAt": model["uploadedAt"],
     "active": model.get("active", False),
@@ -128,8 +135,27 @@ def public_model_meta(model):
   }
 
 
+def looks_like_stored_model_id(name):
+  stem = Path(name or "").stem
+  try:
+    uuid.UUID(stem)
+    return True
+  except ValueError:
+    return False
+
+
+def get_display_model_name(model):
+  original_name = model.get("originalName")
+  name = model.get("name") or ""
+  if original_name and not looks_like_stored_model_id(original_name):
+    return original_name
+  if name and not looks_like_stored_model_id(name):
+    return name
+  return KNOWN_MODEL_NAMES_BY_SIZE.get(model.get("size"), name or "Custom model")
+
+
 def model_dedupe_key(model):
-  return (model.get("originalName") or model.get("name") or "").strip().lower()
+  return get_display_model_name(model).strip().lower()
 
 
 def dedupe_model_records(models):
@@ -150,10 +176,17 @@ def recover_model_metadata():
   for path in sorted(MODEL_DIR.glob("*.h5")) + sorted(MODEL_DIR.glob("*.keras")):
     model_id = path.stem
     current = existing_by_file.get(path.name) or existing_by_id.get(model_id) or {}
+    size = f"{path.stat().st_size / 1024 / 1024:.2f} MB"
+    display_name = get_display_model_name({
+      "name": current.get("name") or path.name,
+      "originalName": current.get("originalName"),
+      "size": size,
+    })
     recovered.append({
       "id": current.get("id") or model_id,
-      "name": current.get("name") or current.get("originalName") or path.name,
-      "size": f"{path.stat().st_size / 1024 / 1024:.2f} MB",
+      "name": display_name,
+      "originalName": display_name,
+      "size": size,
       "uploadedAt": current.get("uploadedAt") or "",
       "active": current.get("active", False),
       "format": "keras-h5",

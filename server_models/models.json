@@ -5,7 +5,7 @@
     "originalName": "siamese_model(Anna).h5",
     "size": "12.12 MB",
     "uploadedAt": "",
-    "active": false,
+    "active": true,
     "format": "keras-h5",
     "outputMode": "embedding",
     "path": "/Users/p1650900770/Downloads/snn_workflow_web_project_v2/server_models/14d068a8-2764-45bd-9c80-85d141b15002.h5"
@@ -16,7 +16,7 @@
     "originalName": "siamese_model(Ammy).h5",
     "size": "10.52 MB",
     "uploadedAt": "",
-    "active": true,
+    "active": false,
     "format": "keras-h5",
     "outputMode": "embedding",
     "path": "/Users/p1650900770/Downloads/snn_workflow_web_project_v2/server_models/334f16a2-a344-4e1b-a699-072b1531854b.h5"
